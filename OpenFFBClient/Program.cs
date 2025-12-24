@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using OpenFFBoard;
 
@@ -10,16 +12,18 @@ namespace OpenFFBClient
         static void Main(string[] args)
         {
             //--SERIAL--//
-            var boards = OpenFFBoard.Serial.GetBoards();
-            Board openFFBoard = new Serial(Serial.GetBoards()[1], 500000);
+            //var boards = OpenFFBoard.Serial.GetBoards();
+            //Board openFFBoard = new Serial(Serial.GetBoards()[1], 500000);
 
             //--HID--//
-            //var boards = OpenFFBoard.Hid.GetBoardsAsync().Result;
-            //Board openFFBoard = new OpenFFBoard.Hid(boards[0]);
+            var boards = OpenFFBoard.Hid.GetBoardsAsync().Result;
+            Board openFFBoard = new OpenFFBoard.Hid(boards[0]);
 
-            openFFBoard.Connect();
+            openFFBoard.ConnectAsync();
 
-            //openFFBoard.System.SetDebug(true);
+            Console.WriteLine("Debug Mode: {0}", openFFBoard.System.GetDebug());
+            Console.WriteLine("Enable Debug Mode: {0}", openFFBoard.System.SetDebug(true));
+
 
             #region AXIS
             Console.WriteLine("---FFB AXIS---");
@@ -29,6 +33,7 @@ namespace OpenFFBClient
             Console.WriteLine("CMDUID: {0}", openFFBoard.Axis.GetCmduid());
             Console.WriteLine("Instance: {0}", openFFBoard.Axis.GetInstance());
             Console.WriteLine("Power: {0}", openFFBoard.Axis.GetPower());
+            Console.WriteLine("Set Power: {0}", openFFBoard.Axis.SetPower(12345));
             Console.WriteLine("Rotation Degrees: {0}°", openFFBoard.Axis.GetDegrees());
             Console.WriteLine("Endstop Gain: {0}", openFFBoard.Axis.GetEsgain());
             Console.WriteLine("Zero encoder: {0}", openFFBoard.Axis.GetZeroenc());
@@ -55,8 +60,8 @@ namespace OpenFFBClient
             //Console.WriteLine("DFU: {0}", openFFBoard.System.GetDfu());
             Console.WriteLine("List mainclasses: {0}", openFFBoard.System.GetLsmain());
             Console.WriteLine("List active classes: {0}", openFFBoard.System.GetLsactive());
-            Console.WriteLine("Internal Voltage: {0}", (float)openFFBoard.System.GetVint() / 1000);
-            Console.WriteLine("External Voltage: {0}", (float)openFFBoard.System.GetVext() / 1000);
+            Console.WriteLine("Internal Voltage: {0}", openFFBoard.System.GetVint());
+            Console.WriteLine("External Voltage: {0}", openFFBoard.System.GetVext());
             Console.WriteLine("Main class: {0}", openFFBoard.System.GetMain());
             Console.WriteLine("Firmware version: {0}", openFFBoard.System.GetSwver());
             Console.WriteLine("Hardware type: {0}", openFFBoard.System.GetHwtype());
@@ -94,12 +99,12 @@ namespace OpenFFBClient
             Console.WriteLine("CMDUID: {0}", openFFBoard.Main.GetCmduid());
             Console.WriteLine("Instance: {0}", openFFBoard.Main.GetInstance());
             Console.WriteLine("FFB Active: {0}", openFFBoard.Main.GetFfbactive());
-            Console.WriteLine("Enabled button sources: {0}", openFFBoard.Main.GetBtntypes());
+            //Console.WriteLine("Enabled button sources: {0}", openFFBoard.Main.GetBtntypes());
             //Console.WriteLine("Enable button source: {0}", openFFBoard.Main.SetAddbtn(1));
-            Console.WriteLine("List available button sources: {0}", openFFBoard.Main.GetLsbtn());
-            Console.WriteLine("Enabled analog sources: {0}", openFFBoard.Main.GetAintypes());
+            //Console.WriteLine("List available button sources: {0}", openFFBoard.Main.GetLsbtn());
+            //Console.WriteLine("Enabled analog sources: {0}", openFFBoard.Main.GetAintypes());
             //Console.WriteLine("Enable analog source: {0}", openFFBoard.Main.SetAddain(1));
-            Console.WriteLine("List available analog sources: {0}", openFFBoard.Main.GetLsbtn());
+            //Console.WriteLine("List available analog sources: {0}", openFFBoard.Main.GetLsbtn());
             Console.WriteLine("HID rate: {0}", openFFBoard.Main.GetHidrate());
             Console.WriteLine("HID send speed: {0}", openFFBoard.Main.GetHidsendspd());
             #endregion
@@ -176,8 +181,10 @@ namespace OpenFFBClient
             Console.WriteLine("VM (mV): {0}", openFFBoard.TMC4671Driver.GetVm());
             #endregion
 
+            openFFBoard.Disconnect();
+
             Console.ReadKey();
-            
+
         }
 
     }

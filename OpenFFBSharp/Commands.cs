@@ -1398,7 +1398,7 @@ namespace OpenFFBoard
 			public bool SetSpeed(byte newSpeed)
 			{
 				var query = _speed.SetValue(_board, this, newSpeed);
-				return query.Type == CmdType.Acknowledgment && query.ClassId == ClassId && query.Cmd == _speed;
+				return query.Type == CmdType.Request || query.Type == CmdType.Write && query.ClassId == ClassId && query.Cmd == _speed;
 			}
 
 
@@ -1413,16 +1413,16 @@ namespace OpenFFBoard
 			#endregion
 
 			#region send
-			private readonly BoardCommand<string> _send = new BoardCommand<string>("send", 0x1, "Send CAN frame. Adr&Value required", CmdTypes.SetAddress);
+			private readonly BoardCommand<byte[]> _send = new BoardCommand<byte[]>("send", 0x1, "Send CAN frame. Adr&Value required", CmdTypes.SetAddress);
 
 			/// <summary>
 			/// Send CAN frame. Useful for static length CAN protocols where the message length does not need to be changed per new frame.
 			/// </summary>
 			/// <returns></returns>
-			public bool SendFrame(ulong address, string data)
+			public bool SendRawFrame(ulong address, byte[] data)
 			{
 				var query = _send.SetValue(_board, this, data, address);
-				return query.Type == CmdType.Acknowledgment || query.Type == CmdType.Request && query.ClassId == ClassId && query.Cmd == _send;
+				return query.Type == CmdType.RequestAddress || query.Type == CmdType.WriteAddress && query.ClassId == ClassId && query.Cmd == _send;
 			}
 			#endregion
 
@@ -1445,7 +1445,7 @@ namespace OpenFFBoard
 			public bool SetLength(byte newLength)
 			{
 				var query = _length.SetValue(_board, this, newLength);
-				return query.Type == CmdType.Acknowledgment || query.Type == CmdType.Info && query.ClassId == ClassId && query.Cmd == _length;
+				return query.Type == CmdType.Request || query.Type == CmdType.Write && query.ClassId == ClassId && query.Cmd == _length;
 			}
 
 			/// <summary>
@@ -1457,7 +1457,7 @@ namespace OpenFFBoard
 			public bool SendFrame(uint address, byte[] data)
             {
 				if (this.SetLength((byte)data.Length))
-					return this.SendFrame(address, BitConverter.ToString(data));
+					return this.SendRawFrame(address, data);
 				return false;
             }
 
@@ -3281,28 +3281,28 @@ namespace OpenFFBoard
 			#endregion
 
 			#region vint
-			private readonly BoardCommand<uint> _vint = new BoardCommand<uint>("vint", 0xE, "Internal voltage(mV)", CmdTypes.Get);
+			private readonly BoardCommand<float> _vint = new BoardCommand<float>("vint", 0xE, "Internal voltage(mV)", CmdTypes.Get);
 
 			/// <summary>
-			/// Internal voltage(mV)
+			/// Internal voltage(V)
 			/// </summary>
 			/// <returns></returns>
-			public uint GetVint()
+			public float GetVint()
 			{
-				return _vint.GetValue(_board, this);
+				return _vint.GetValue(_board, this) / 1000f;
 			}
 			#endregion
 
 			#region vext
-			private readonly BoardCommand<uint> _vext = new BoardCommand<uint>("vext", 0xF, "External voltage(mV)", CmdTypes.Get);
+			private readonly BoardCommand<float> _vext = new BoardCommand<float>("vext", 0xF, "External voltage(mV)", CmdTypes.Get);
 
 			/// <summary>
-			/// External voltage(mV)
+			/// External voltage(V)
 			/// </summary>
 			/// <returns></returns>
-			public uint GetVext()
+			public float GetVext()
 			{
-				return _vext.GetValue(_board, this);
+				return _vext.GetValue(_board, this) / 1000f;
 			}
 			#endregion
 
@@ -3456,7 +3456,7 @@ namespace OpenFFBoard
 			public bool SetDebug(bool newDebug)
 			{
 				var query = _debug.SetValue(_board, this, newDebug);
-				return query.Type == CmdType.Acknowledgment && query.ClassId == ClassId && query.Cmd == _debug;
+				return query.Type == CmdType.Write && query.ClassId == ClassId && query.Cmd == _debug;
 			}
 
 			#endregion
@@ -4629,17 +4629,17 @@ namespace OpenFFBoard
 			#endregion
 		}
 
-		public class BoardResponse
+		public class BoardResponse<T>
 		{
 			public CmdType Type { get; set; }
 			public ushort ClassId { get; set; }
 			public byte Instance { get; set; }
 			public BoardCommand Cmd { get; set; }
-			public object Data { get; set; }
+			public T Data { get; set; }
 			public ulong Address { get; set; }
-		}
+        }
 
-		public enum CmdType
+        public enum CmdType
 		{
 			Write = 0,
 			Request = 1,
@@ -4690,16 +4690,16 @@ namespace OpenFFBoard
 		{
 			if (Types.HasFlag(BoardClass.CmdTypes.Get))
 			{
-				Commands.BoardResponse response = board.GetBoardData(boardClass, null, this, null);
-				if (response.Type == Commands.CmdType.Error || response.Type == Commands.CmdType.NotFound)
-					return default;
-				if (Convert.ToString(response.Data) == "OK")
-					return (T)Convert.ChangeType(true, typeof(T));
-
-				if (typeof(T) == typeof(bool))
-					return (T)Convert.ChangeType(Convert.ToString(response.Data) == "1", typeof(T));
-
-				return (T)Convert.ChangeType(response.Data, typeof(T));
+                try
+                {
+                    Commands.BoardResponse<T> response = board.GetBoardData(boardClass, null, this, null);
+                    return response.Data;
+                }
+                catch (Exception ex)
+                {
+                    return default;
+                }
+				
 			}
 
 			throw new Exception("Command does not support get request");
@@ -4709,28 +4709,52 @@ namespace OpenFFBoard
 		{
 			if (Types.HasFlag(BoardClass.CmdTypes.Get))
 			{
-				Commands.BoardResponse response = board.GetBoardData(boardClass, null, this, address);
-				return (T)Convert.ChangeType(response.Data, typeof(T));
+                try
+                {
+                    Commands.BoardResponse<T> response = board.GetBoardData(boardClass, null, this, address);
+                    return response.Data;
+                }
+                catch (Exception ex)
+                {
+                    return default;
+                }
+				
 			}
 
 			throw new Exception("Command does not support get address request");
 		}
 
-		public Commands.BoardResponse SetValue(Board board, BoardClass boardClass, T value)
+		public Commands.BoardResponse<T> SetValue(Board board, BoardClass boardClass, T value)
 		{
 			if (Types.HasFlag(BoardClass.CmdTypes.Set))
 			{
-				return board.SetBoardData(boardClass, 0, this, value, null);
+                try
+                {
+                    return board.SetBoardData(boardClass, 0, this, value, null);
+                }
+                catch (Exception ex)
+                {
+                    return null;
+                }
+				
 			}
 
 			throw new Exception("Command does not support set request");
 		}
 
-		public Commands.BoardResponse SetValue(Board board, BoardClass boardClass, T value, ulong address)
+		public Commands.BoardResponse<T> SetValue(Board board, BoardClass boardClass, T value, ulong address)
 		{
 			if (Types.HasFlag(BoardClass.CmdTypes.Set) || Types.HasFlag(BoardClass.CmdTypes.SetAddress))
 			{
-				return board.SetBoardData(boardClass, 0, this, value, address);
+                try
+                {
+                    return board.SetBoardData(boardClass, 0, this, value, address);
+                }
+                catch (Exception ex)
+                {
+                    return null;
+                }
+				
 			}
 
 			throw new Exception("Command does not support set address request");
@@ -4740,8 +4764,16 @@ namespace OpenFFBoard
 		{
 			if (Types.HasFlag(BoardClass.CmdTypes.Info))
 			{
-				Commands.BoardResponse response = board.GetBoardData(boardClass, null, this, null, true);
-				return Convert.ToString(response.Data);
+                try
+                {
+                    Commands.BoardResponse<T> response = board.GetBoardData<T>(boardClass, null, this, null, true);
+                    return Convert.ToString(response.Data);
+                }
+                catch (Exception ex)
+                {
+                    return null;
+                }
+				
 			}
 
 			throw new Exception("Command does not support info request");

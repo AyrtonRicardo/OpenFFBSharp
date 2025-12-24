@@ -1,4 +1,5 @@
-﻿using static OpenFFBoard.Commands;
+﻿using System.Threading.Tasks;
+using static OpenFFBoard.Commands;
 
 namespace OpenFFBoard
 {
@@ -48,8 +49,9 @@ namespace OpenFFBoard
 
 
 		public abstract void Connect();
-		public abstract void Disconnect();
-		internal abstract Commands.BoardResponse GetBoardData(BoardClass boardClass, byte? instance, BoardCommand cmd, ulong? address, bool info = false);
-		internal abstract Commands.BoardResponse SetBoardData<T>(BoardClass boardClass, byte instance, BoardCommand<T> cmd, T value, ulong? address);
+        public abstract Task ConnectAsync();
+        public abstract void Disconnect();
+		internal abstract Commands.BoardResponse<T> GetBoardData<T>(BoardClass boardClass, byte? instance, BoardCommand<T> cmd, ulong? address, bool info = false);
+		internal abstract Commands.BoardResponse<T> SetBoardData<T>(BoardClass boardClass, byte instance, BoardCommand<T> cmd, T value, ulong? address);
 	}
 }

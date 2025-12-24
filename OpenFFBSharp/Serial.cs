@@ -14,16 +14,16 @@ namespace OpenFFBoard
         private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
         private const int Timeout = 500;
 
-        internal class SerialCommand
+        internal class SerialCommand<T>
         {
             public readonly BoardClass boardClass;
             public readonly byte? instance;
             public readonly BoardCommand cmd;
             public readonly ulong? address;
-            public readonly string data;
+            public readonly T data;
             public readonly bool info = false;
 
-            public SerialCommand(BoardClass boardClass, byte? instance, BoardCommand cmd, ulong? address, string data, bool info = false)
+            public SerialCommand(BoardClass boardClass, byte? instance, BoardCommand cmd, ulong? address, T data, bool info = false)
             {
                 this.boardClass = boardClass;
                 this.instance = instance;
@@ -37,6 +37,12 @@ namespace OpenFFBoard
         public Serial(string comPort, int baudRate)
         {
             _serialPort = new SerialPort(comPort, baudRate);
+        }
+
+        public override Task ConnectAsync()
+        {
+            Connect();
+            return Task.CompletedTask;
         }
 
         public override void Connect()
@@ -72,19 +78,19 @@ namespace OpenFFBoard
             return SerialPort.GetPortNames();
         }
 
-        internal override Commands.BoardResponse GetBoardData(BoardClass boardClass, byte? instance, BoardCommand cmd, ulong? address, bool info = false)
+        internal override Commands.BoardResponse<T> GetBoardData<T>(BoardClass boardClass, byte? instance, BoardCommand<T> cmd, ulong? address, bool info = false)
         {
-            SerialCommand command = new SerialCommand(boardClass, instance, cmd, address, null, info);
+            SerialCommand<T> command = new SerialCommand<T>(boardClass, instance, cmd, address, default, info);
             return Task.Run(() => SendCmd(command)).Result;
         }
 
-        internal override Commands.BoardResponse SetBoardData<T>(BoardClass boardClass, byte instance, BoardCommand<T> cmd, T value, ulong? address)
+        internal override Commands.BoardResponse<T> SetBoardData<T>(BoardClass boardClass, byte instance, BoardCommand<T> cmd, T value, ulong? address)
         {
-            SerialCommand command = new SerialCommand(boardClass, instance, cmd, address, value is bool ? (Convert.ToBoolean(value) ? "1" : "0") : Convert.ToString(value), false);
+            SerialCommand<T> command = new SerialCommand<T>(boardClass, instance, cmd, address, value);
             return Task.Run(() => SendCmd(command)).Result;
         }
 
-        internal async Task<BoardResponse> SendCmd(SerialCommand cmd)
+        internal async Task<BoardResponse<T>> SendCmd<T>(SerialCommand<T> cmd)
         {
             await _semaphore.WaitAsync();
             string response;
@@ -168,32 +174,6 @@ namespace OpenFFBoard
             
         }
 
-        public Commands.BoardResponse SendCmd(BoardClass classId, byte? instance, BoardCommand cmd, ulong? address, string data, bool info)
-        {
-            if (cmd.Types.HasFlag(BoardClass.CmdTypes.Debug))
-            {
-                BoardCommand<bool> debugCommand = new BoardCommand<bool>("debug", 0x13,
-                    "Enable or disable debug commands", BoardClass.CmdTypes.Get | BoardClass.CmdTypes.Set);
-
-                BoardClass systemClass = new Commands.System(null);
-
-                var debugResponse = SendCmd(systemClass, instance, debugCommand, null, data, false);
-                //make sure debug mode is enabled
-                if ((string)debugResponse.Data == "0")
-                {
-                    throw new InvalidOperationException("OpenFFBoard has debug mode disabled.");
-                }
-            }
-            string cmdBuffer = ConstructMessage(classId, instance, cmd, address, data, info);
-
-            _serialPort.WriteLine(cmdBuffer);
-            string response = "";
-            do
-                response += _serialPort.ReadExisting();
-            while (!response.Contains("]"));
-            return ParseBoardResponse(new SerialCommand(classId, instance, cmd, address, data, info), response);
-        }
-
         public async Task<string> SendRawMessage(string message)
         {
             Debug.WriteLine($"Raw message waiting for place in serial queue: {message}");
@@ -228,82 +208,119 @@ namespace OpenFFBoard
             return response;
         }
 
-        private BoardResponse ParseBoardResponse(SerialCommand cmd, string response)
+        private static BoardResponse<T> ParseBoardResponse<T>(SerialCommand<T> cmd, string response)
         {
-            Stopwatch sw = Stopwatch.StartNew();
+            if (!response.StartsWith("[")) return null;
 
-            if (response.StartsWith("["))
+            response = response.TrimStart('[');
+            response = response.TrimEnd(']');
+            string[] splitResponse = response.Split('|');
+            if (splitResponse[0] == ConstructMessage(cmd))
             {
-                response = response.TrimStart('[');
-                response = response.TrimEnd(']');
-                string[] splitResponse = response.Split('|');
-                if (splitResponse[0] == ConstructMessage(cmd))
+                string[] splitData = splitResponse[1].Split(new char[':'], 1);
+                string responseData;
+                ulong responseAddress;
+                if (splitData.Length >= 2)
                 {
-                    string[] splitData = splitResponse[1].Split(new char[':'], 1);
-                    string responseData;
-                    ulong responseAddr;
-                    if (splitData.Length >= 2)
-                    {
-                        responseData = splitData[0];
-                        responseAddr = Convert.ToUInt64(splitData[1]);
-                    }
-                    else
-                    {
-                        responseData = splitResponse[1];
-                        responseAddr = cmd.address ?? 0;
-                    }
-                    
-                    return new Commands.BoardResponse
-                    {
-                        Type = (Commands.CmdType)cmd.cmd.Id,
-                        ClassId = cmd.boardClass.ClassId,
-                        Instance = cmd.instance ?? 0,
-                        Cmd = cmd.cmd,
-                        Data = responseData,
-                        Address = responseAddr
-                    };
+                    responseData = splitData[0];
+                    responseAddress = Convert.ToUInt64(splitData[1]);
                 }
                 else
                 {
-                    //response command doesn't match what was sent
-                    if (splitResponse[0] == "sys.0.errors?")
+                    responseData = splitResponse[1];
+                    responseAddress = cmd.address ?? 0;
+                }
+
+                T data;
+
+                if (((string)Convert.ChangeType(responseData, typeof(string))).Equals("OK"))
+                {
+                    data = default;
+                }
+                else if (typeof(T) == typeof(bool))
+                {
+                    data = (T)Convert.ChangeType(Convert.ToString(responseData).Equals("1"), typeof(T));
+                }
+                else
+                {
+                    data = (T)Convert.ChangeType(responseData, typeof(T));
+                }
+
+                return new Commands.BoardResponse<T>
+                {
+                    Type = GetCmdType(cmd),
+                    ClassId = cmd.boardClass.ClassId,
+                    Instance = cmd.instance ?? 0,
+                    Cmd = cmd.cmd,
+                    Data = data,
+                    Address = responseAddress
+                };
+            }
+            else
+            {
+                //response command doesn't match what was sent
+                if (splitResponse[0] == "sys.0.errors?")
+                {
+                    //Error message
+                    string[] splitData = splitResponse[1].Trim().Split(':');
+                    return new Commands.BoardResponse<T>
                     {
-                        //Error message
-                        string[] splitData = splitResponse[1].Trim().Split(':');
-                        return new Commands.BoardResponse
-                        {
-                            Type = Commands.CmdType.Error,
-                            ClassId = cmd.boardClass.ClassId,
-                            Instance = cmd.instance ?? 0,
-                            Cmd = cmd.cmd,
-                            Data = splitResponse[1],
-                            Address = 0
-                        };
-                    }
+                        Type = Commands.CmdType.Error,
+                        ClassId = cmd.boardClass.ClassId,
+                        Instance = cmd.instance ?? 0,
+                        Cmd = cmd.cmd,
+                        Data = default,
+                        Address = 0
+                    };
                 }
             }
 
             return null;
         }
 
-        private static string ConstructMessage(BoardClass classId, byte? instance, BoardCommand cmd, ulong? address, string data, bool info)
+        private static CmdType GetCmdType<T>(SerialCommand<T> cmd)
         {
-            CmdType type;
-            if (info)
-                type = CmdType.Info;
-            else if (address == null && data == null)
-                type = CmdType.Request;
-            else if (address != null && data == null)
-                type = CmdType.RequestAddress;
-            else if (address == null)
-                type = CmdType.Write;
-            else
-                type = CmdType.WriteAddress;
+            if (cmd.info)
+                return CmdType.Info;
+            if (cmd.address != null && (cmd.data == null || cmd.data.Equals(default(T))))
+                return CmdType.RequestAddress;
+            if (cmd.address == null && cmd.data == null || cmd.data.Equals(default(T)))
+                return CmdType.Request;
+            if (cmd.address == null)
+                return CmdType.Write;
+
+            return CmdType.WriteAddress;
+        }
+
+        private static string ConstructMessage<T>(BoardClass classId, byte? instance, BoardCommand cmd, ulong? address, T data, bool info)
+        {
+            CmdType type = GetCmdType(new SerialCommand<T>(classId, instance, cmd, address, data, info));
 
             string cmdBuffer = classId.Prefix + ".";
             if (instance != null)
                 cmdBuffer += $"{instance}.";
             cmdBuffer += cmd.Name;
+
+            string stringData;
+            if (typeof(T) == typeof(bool))
+            {
+                stringData = (bool)Convert.ChangeType(data, typeof(bool)) ? "1" : "0";
+            }
+            else if (typeof(T) == typeof(byte[]))
+            {
+                long hidData = 0;
+                var bytes = (byte[])Convert.ChangeType(data, typeof(byte[]));
+                hidData = 0;
+                for (int i = 0; i < bytes.Length; i++)
+                {
+                    hidData |= (long)bytes[i] << (i * 8);
+                }
+                stringData = Convert.ToString(hidData);
+            }
+            else
+            {
+                stringData = (string)Convert.ChangeType(data, typeof(string));
+            }
 
             switch (type)
             {
@@ -316,11 +333,11 @@ namespace OpenFFBoard
                     break;
                 case CmdType.Write:
                     cmdBuffer += '=';
-                    cmdBuffer += data;
+                    cmdBuffer += stringData;
                     break;
                 case CmdType.WriteAddress:
                     cmdBuffer += '=';
-                    cmdBuffer += data;
+                    cmdBuffer += stringData;
                     cmdBuffer += '?';
                     cmdBuffer += address;
                     break;
@@ -331,7 +348,7 @@ namespace OpenFFBoard
             return cmdBuffer;
         }
 
-        private static string ConstructMessage(SerialCommand command)
+        private static string ConstructMessage<T>(SerialCommand<T> command)
         {
             return ConstructMessage(
                 command.boardClass, 
